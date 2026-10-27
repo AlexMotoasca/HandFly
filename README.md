@@ -1,545 +1,201 @@
-# HandFly - Hand Gesture Drone Control System
+# HandFly
 
-**Real-time hand gesture recognition for drone flight control using OAK-D Pro stereo depth camera and MediaPipe Hands.**
+**Hand gesture control for a custom quadcopter, using OAK-D Pro, MediaPipe, and an Arduino-to-RC bridge.**
 
-Control your drone with hand gestures! This project uses an OAK-D Pro camera to detect hand landmarks, recognize gestures, and send PWM commands to a Pixhawk drone via Arduino.
+HandFly turns hand poses and movement into roll, pitch, throttle, and yaw commands. An OAK-D Pro camera captures RGB and depth data, Python recognizes the gestures, and an Arduino converts serial commands into a PPM signal for the radio control chain.
 
----
+![HandFly quadcopter with protective rotor guards and landing gear](docs/media/handfly.jpg)
 
-## 📋 Table of Contents
+[Demo videos](#demo-videos) · [Hardware](#hardware) · [Architecture](#architecture) · [Getting started](#getting-started) · [Gesture controls](#gesture-controls)
 
-1. [System Overview](#system-overview)
-2. [Hardware Requirements](#hardware-requirements)
-3. [Installation](#installation)
-4. [Quick Start](#quick-start)
-5. [How It Works](#how-it-works)
-6. [Hand Gestures](#hand-gestures)
-7. [Configuration](#configuration)
-8. [File Structure](#file-structure)
-9. [Troubleshooting](#troubleshooting)
+## Demo videos
 
----
+| Recording | Video |
+| --- | --- |
+| Flight demonstration | [Watch or download the flight demo](docs/media/flight-demo.mp4) |
+| Functionality demonstration with a weight strapped to the drone | [Watch or download the weighted demo](docs/media/weighted-functionality-demo.mp4) |
 
-## 🎯 System Overview
+The original MP4 recordings are included in the repository. Open either link to view or download the video.
 
-HandFly is a complete hand gesture-based drone control system with three main components:
+## Hardware
 
-```
-Hand Gesture Recognition (MediaPipe)
-           ↓
-    3D Spatial Tracking (OAK-D Pro Depth)
-           ↓
-    Flight Control Processing
-           ↓
-    Arduino Serial Output (PWM Commands)
-           ↓
-    Pixhawk Flight Controller
-```
+<table>
+  <tr>
+    <td align="center" width="50%"><img src="docs/media/handfly-top-view.jpg" alt="Top view of the HandFly quadcopter, showing four guarded propellers and the central electronics" width="480"></td>
+    <td align="center" width="50%"><img src="docs/media/controller.jpg" alt="FlySky FS-i6X transmitter with an OAK-D Pro camera mounted above it" width="360"></td>
+  </tr>
+  <tr>
+    <td align="center">Custom quadcopter and rotor guards</td>
+    <td align="center">Camera and radio transmitter assembly</td>
+  </tr>
+</table>
 
-**Pipeline:**
-1. OAK-D Pro captures RGB video + stereo depth
-2. MediaPipe Hands detects 21 hand landmarks in real-time
-3. Gesture recognition identifies hand position/shape
-4. 3D spatial anchors calculate hand movement deltas
-5. Flight controller maps gestures to PWM commands (1000-2000μs)
-6. Arduino receives commands and generates PPM signal
-7. Pixhawk receives PPM and controls the drone
+The supplied photos and architecture diagrams document this build:
 
----
+| Component | Role |
+| --- | --- |
+| OAK-D Pro | RGB capture and active stereo depth sensing |
+| PC / laptop | MediaPipe hand landmarks, gesture recognition, and command generation |
+| Arduino Uno | USB serial to PPM bridge |
+| FlySky FS-i6X transmitter and RC receiver | Radio link between the control station and aircraft |
+| Pixhawk flight controller | Receives RC commands and drives the aircraft |
+| 22.2 V 6S battery and power module | Power supply and voltage/current sensing |
+| SpeedyBee 4-in-1, 50 A ESC | Motor control |
+| Four HGLRC 1900 KV motors | Propulsion |
 
-## 🔧 Hardware Requirements
+## Architecture
 
-| Component | Purpose |
-|-----------|---------|
-| **OAK-D Pro** | Stereo depth camera with laser dot projector |
-| **Arduino (CH340/Uno)** | Serial bridge to generate PPM signal |
-| **Pixhawk Flight Controller** | Drone autopilot (receives PPM signal) |
-| **5.8GHz Radio Transmitter** | Sends control commands from Arduino to Pixhawk |
-| **PC/Laptop** | Runs hand pose estimation and control logic |
+### Control path
 
-### USB Connection
-```
-PC (USB 3.1) ←→ OAK-D Pro
-PC (USB 2.0) ←→ Arduino (CH340)
-Arduino (GPIO Pin 10) ←→ Radio Transmitter (PPM IN)
-Radio Transmitter (5.8GHz) ←→ Pixhawk (RC IN)
+```text
+Hand → OAK-D Pro RGB + depth → Python / MediaPipe
+     → gesture-to-channel mapping → USB serial → Arduino PPM
+     → radio transmitter → receiver → Pixhawk → ESCs → motors
 ```
 
----
+![Control architecture: camera, host processing, Arduino bridge, and 2.4 GHz radio link](docs/media/control-architecture.png)
 
-## 📦 Installation
+MediaPipe detects 21 hand landmarks. The application classifies finger poses and uses hand position or depth to calculate channel values. Commands are sent as text over USB serial; the Arduino emits the corresponding PPM channel pulses.
 
-### 1. Clone or Download the Project
+### Software flow
 
-```bash
-cd F:\Github\HandFly\PythonProject
-```
+![Software architecture showing landmark extraction, gesture switching, spatial anchors, filtering, and command output](docs/media/software-architecture.png)
 
-### 2. Create Virtual Environment
+The diagram illustrates the gesture-processing flow. Exact mappings differ between the standalone and modular implementations; the [gesture table below](#gesture-controls) describes the current code. In particular, the modular controller currently disables depth-based throttle for `TWO`.
 
-```bash
+### Power and flight electronics
+
+![Power architecture showing the 6S battery, power module, ESC, motors, and flight-controller sensors](docs/media/power-architecture.png)
+
+The original diagrams retain their Romanian labels. The power diagram shows the propulsion supply and flight-controller connections separately from the camera and host control path.
+
+## Getting started
+
+### 1. Install Python dependencies
+
+From the repository root, create a virtual environment and install the application requirements. These commands use PowerShell:
+
+```powershell
+cd PythonProject
 python -m venv .venv
-.venv\Scripts\activate
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-### 3. Install Dependencies
+The dependency list is maintained in [PythonProject/requirements.txt](PythonProject/requirements.txt). It includes DepthAI, MediaPipe, OpenCV, NumPy, and pyserial.
 
-```bash
-pip install -r requirements.txt
+The hand landmark model is included at [PythonProject/models/hand_landmarker.task](PythonProject/models/hand_landmarker.task). Run the application from `PythonProject` so its relative model path resolves.
+
+### 2. Check the camera and run without serial output
+
+Connect the OAK-D Pro over USB, then run:
+
+```powershell
+.\.venv\Scripts\python.exe probe_device.py
+.\.venv\Scripts\python.exe main_modular.py
 ```
 
-**Key packages:**
-```
-depthai>=3.0.0          # OAK-D Pro SDK
-mediapipe>=0.10.0       # Hand landmark detection
-opencv-python>=4.9.0    # Computer vision
-numpy>=2.4.0            # Numerical computing
-pyserial>=3.5           # Arduino serial communication
-```
+Omitting `--port` starts the application without Arduino serial output. The camera is still required. Use the live overlay to check hand recognition and channel values.
 
-### 4. Download MediaPipe Hand Model
+The standalone implementation is also available:
 
-```bash
-# The hand_landmarker.task file should be in:
-F:\Github\HandFly\PythonProject\models\hand_landmarker.task
-
-# If missing, download from:
-# https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker
+```powershell
+.\.venv\Scripts\python.exe standalone_gpu.py
 ```
 
-### 5. Upload Arduino Code
+### 3. Set up the Arduino bridge
 
-Flash your Arduino with the PPM encoder code:
-- Open `Arduino IDE`
-- Load the provided PPM encoder sketch
-- Select board: "Arduino Uno" or "CH340"
-- Select correct COM port
-- Upload
+Open [arduin_code.ino](arduin_code.ino) in Arduino IDE and upload it to the appropriate board and serial port. The supplied sketch uses:
 
----
+| Setting | Value |
+| --- | --- |
+| Serial baud rate | 115200 |
+| PPM output | Digital pin **3** |
+| PPM channels | **6** |
+| Frame length | 20,000 microseconds |
+| Pulse width | 400 microseconds |
+| Channels 1–4 | Roll, pitch, throttle, yaw |
+| Channels 5–6 | Fixed at 1000 microseconds |
 
-## 🚀 Quick Start
+Connect the PPM output and common ground to the transmitter's compatible PPM/trainer input, following the wiring for your hardware.
 
-### Test 1: Verify OAK-D Camera
+The serial protocol is one newline-terminated command per line:
 
-```bash
-python probe_device.py
+```text
+R:1500 P:1500 T:1250 Y:1500
 ```
 
-Should show:
-```
-Connected — Platform: RVC2  |  FPS: 15
-```
+The sketch clamps channel values to 1000–2000. After more than 500 ms without a valid command, it sets roll, pitch, and yaw to 1511 and throttle to 1005.
 
-### Test 2: Run Hand Pose Estimation (No Arduino)
+### 4. Run with serial output
 
-```bash
-python standalone_gpu.py
-```
+List ports and replace `COM3` with the Arduino's port:
 
-- Shows live hand skeleton overlay
-- No Arduino required (dry-run mode)
-- Press 'Q' to quit
-- Press 'R' to recalibrate yaw neutral
-
-### Test 3: Connect Arduino and Test Flight Control
-
-```bash
-python standalone_gpu.py --port COM3
+```powershell
+.\.venv\Scripts\python.exe -m serial.tools.list_ports
+.\.venv\Scripts\python.exe main_modular.py --port COM3
 ```
 
-Replace `COM3` with your Arduino's port. The script will:
-1. Detect your hand
-2. Send PWM commands to Arduino
-3. Display: `R:1500 P:1423 T:1350 Y:1500` (Roll, Pitch, Throttle, Yaw)
+Both entry points accept `--gesture-hold` to set the number of consistent frames required to confirm a gesture; the default is 3.
 
-### Test 4: Run Full System with Main Modular
+## Gesture controls
 
-```bash
-python main_modular.py --port COM3
-```
+The names below are the labels used by the recognizer. `OK` means **thumb extended with the other fingers folded**; `TWO` means **thumb and index extended**.
 
-- Loads MediaPipe hand model
-- Initializes OAK-D Pro with laser dot projector
-- Connects to Arduino
-- Begins drone control
+| Gesture | Hand pose | Modular application | Standalone application |
+| --- | --- | --- | --- |
+| `ONE` | Index extended | Center roll/pitch/yaw; throttle at `HOVER_THROTTLE` | Center all four channels at 1500 |
+| `FIST` | All fingers folded | Center roll/pitch/yaw; throttle at `HOVER_THROTTLE - 100` | Center roll/pitch/yaw; throttle at 1400 |
+| `OK` | Thumb extended | Fixed throttle at `HOVER_THROTTLE + 100` | Fixed throttle at 1600 |
+| `TWO` | Thumb and index extended | Depth throttle disabled; uses `HOVER_THROTTLE` | Depth-relative throttle, limited to 1500–2000 |
+| `PEACE` / `THREE` | Index + middle, optionally thumb | Horizontal hand position controls yaw in the 1250–1750 range | Same yaw range; throttle at 1500 |
+| `FOUR` / `FIVE` | Four fingers / open hand | Hand displacement from a spatial anchor controls roll and pitch | Image-space hand position controls roll and pitch |
 
----
+The modular controller currently sets `HOVER_THROTTLE = 1250` in [config.py](PythonProject/hand_pose/config.py). This makes its `OK` and `FIST` throttle values 1350 and 1150 respectively. The standalone implementation has its own constants and control logic.
 
-## 🧠 How It Works
+These are RC channel commands: a fixed throttle value does not itself guarantee hover, altitude hold, or landing. Actual motion depends on aircraft calibration and the flight-controller mode.
 
-### 1. Hand Detection & Landmarks
-
-MediaPipe Hands identifies **21 landmarks** on your hand:
-```
-0  = Wrist
-1-4 = Thumb
-5-8 = Index finger
-9-12 = Middle finger
-13-16 = Ring finger
-17-20 = Pinky
-```
-
-### 2. Gesture Recognition
-
-Gestures are recognized by analyzing **finger angles and distances**:
-
-| Gesture | Recognition Logic | Control |
-|---------|-------------------|---------|
-| **FIST** | All fingers folded | Emergency stop (descend) |
-| **ONE** | Index only raised | Failsafe / hover |
-| **TWO** | Index + middle raised | Failsafe / hover |
-| **FIVE** | All fingers open | Direct manual control |
-| **OK** | Thumb-index circle | Takeoff & 3D movement |
-| **PEACE** | Index + middle V shape | Yaw rotation only |
-
-### 3. 3D Spatial Anchoring
-
-When you make a gesture, **Landmark 9 (middle finger knuckle)** position is saved as an anchor:
-
-```
-Anchor = (X_mm, Y_mm, Z_mm) at gesture start
-
-Every frame:
-  Delta_X = Current_X - Anchor_X  (Left/Right movement)
-  Delta_Y = Current_Y - Anchor_Y  (Up/Down movement)
-  Delta_Z = Current_Z - Anchor_Z  (Toward/Away camera - depth)
-
-PWM_Output = Map(Delta, Range) + Smoothing + Deadzone
-```
-
-### 4. Depth Sensing (Active Stereo)
-
-OAK-D Pro provides **stereo depth** enhanced by:
-- ✅ **Laser dot projector** (40% intensity) - Adds patterns for texture-poor areas
-- ✅ **Spatial filtering** - Removes noise holes
-- ✅ **Temporal filtering** - Smooths depth across frames
-- ✅ **Subpixel mode** - Fine-grained depth resolution
-
-**Depth → Throttle Mapping:**
-```
-20cm (close) = 2000 PWM (climb)
-70cm (far)   = 1000 PWM (descend)
-```
-
-### 5. Flight Control Processing
-
-**Exponential Moving Average (EMA) Filter:**
-```python
-Smoothed = alpha * Raw_Value + (1 - alpha) * Previous_Smoothed
-alpha = 0.15 (adjustable in config.py)
-```
-
-**Deadzone Application:**
-```python
-if |PWM_Value - 1500| < deadzone:
-    PWM_Value = 1500  (snap to center)
-```
-
-**Arduino Output:**
-```
-Format: "R:1500 P:1423 T:1350 Y:1500\n"
-         Roll  Pitch  Throttle Yaw
-         (1000-2000 PWM microseconds)
-```
-
----
-
-## ✋ Hand Gestures
-
-### Gesture Overview
-
-```
-FIST         ONE          TWO          THREE        FOUR
-(stop)       (hover)      (hover)      (unused)     (cruise)
-   👊           ☝️           ✌️           (unused)     🖐️ (4 fingers)
-              
-FIVE         OK           PEACE
-(manual)     (takeoff)    (yaw rotation)
-   🖐️          👌            ✌️
-```
-
-### Detailed Control Map
-
-| Gesture | State | Controls | Behavior |
-|---------|-------|----------|----------|
-| **FIST** | Landing | T:1400 R:1500 P:1500 Y:1500 | Descends slowly, auto-levels |
-| **ONE** | Failsafe | T:1500 R:1500 P:1500 Y:1500 | Hover, motors armed |
-| **TWO** | Failsafe | T:1500 R:1500 P:1500 Y:1500 | Hover, motors armed |
-| **OK** | Takeoff | T:Dynamic R:Dynamic P:Dynamic Y:1500 | Move hand to control all axes |
-| **FOUR** | Cruise | T:1500 R:Dynamic P:Dynamic Y:1500 | Altitude hold, move horizontally |
-| **FIVE** | Manual | T:Dynamic R:Dynamic P:Dynamic Y:1500 | Full 3D manual control |
-| **PEACE** | Yaw | T:1500 R:1500 P:1500 Y:Dynamic | Rotate drone in place |
-
-### OK Gesture (Takeoff & 3D Control)
-
-```
-Hand Position → PWM Output
-───────────────────────────
-Raise hand (↑)     → Throttle UP (2000)
-Lower hand (↓)     → Throttle DOWN (1000)
-Move left (←)      → Roll LEFT (1000)
-Move right (→)     → Roll RIGHT (2000)
-Push toward cam (↑) → Pitch FORWARD (low PWM)
-Pull from cam (↓)  → Pitch BACKWARD (high PWM)
-```
-
----
-
-## ⚙️ Configuration
-
-Edit `hand_pose/config.py` to fine-tune behavior:
-
-```python
-# Depth-to-throttle mapping
-THROTTLE_NEAR_MM = 200    # 20cm → 2000 PWM (climb)
-THROTTLE_FAR_MM = 700     # 70cm → 1000 PWM (descend)
-
-# Control sensitivity
-THUMBS_UP_PITCH_SCALE = 1.0    # 100mm depth = ±100 PWM
-CRUISE_PITCH_SCALE = 1.0       # 100mm depth = ±100 PWM
-CRUISE_ROLL_SCALE = 2.0        # 100mm horizontal = ±200 PWM
-
-# Hand shake filtering
-DEADZONE_X_MM = 15.0   # Ignore left/right shake < 15mm
-DEADZONE_Y_MM = 15.0   # Ignore up/down shake < 15mm
-DEADZONE_Z_MM = 40.0   # Ignore depth shake < 40mm (more noisy)
-
-# EMA smoothing
-# Lower alpha = smoother but slower response
-# Higher alpha = faster but jittery
-alpha = 0.15
-```
-
----
-
-## 📁 File Structure
-
-```
-F:\Github\HandFly\PythonProject\
-├── standalone_gpu.py              ← Main standalone script
-├── main_modular.py                ← Main with modular architecture
-├── main.py                        ← Alternative entry point
-│
-├── hand_pose/                     ← Core flight control package
-│   ├── __init__.py
-│   ├── config.py                  ← All constants & tuning parameters
-│   ├── gesture.py                 ← Gesture recognition logic
-│   ├── flight_control.py          ← Spatial anchor controller
-│   ├── pipeline.py                ← OAK-D pipeline setup
-│   ├── renderer.py                ← Drawing & HUD
-│   ├── serial_output.py           ← Arduino serial communication
-│   └── __pycache__/
-│
-├── models/
-│   └── hand_landmarker.task       ← MediaPipe hand model
-│
-├── depth_test.py                  ← Depth testing script
-├── DotP_test.py                   ← Laser projector testing
-├── Ac_depth_test.py               ← Active stereo testing
-│
-├── test_gestures.py               ← Gesture recognition testing
-├── test_mediapipe_latency.py      ← Performance benchmarking
-│
-└── requirements.txt               ← Python dependencies
-```
-
----
-
-## 🐛 Troubleshooting
-
-### Camera Not Detected
-
-```bash
-python probe_device.py
-```
-
-If no device found:
-1. Check USB 3.1 cable (must be USB 3.0+)
-2. Try different USB port
-3. Unplug/replug camera
-4. Update depthai: `pip install --upgrade depthai`
-
-### Arduino Not Found
-
-```bash
-# List available COM ports
-python -m serial.tools.list_ports
-
-# Connect to specific port
-python standalone_gpu.py --port COM3
-```
-
-### Hand Detection Not Working
-
-- Ensure **good lighting** (at least 500 lux)
-- Keep hand **fully visible** in frame
-- Hand should be **30-100cm from camera**
-- Avoid **shiny/reflective surfaces** behind hand
-
-### Jerky/Unstable Control
-
-**Problem:** PWM values jumping around
-
-**Solutions:**
-1. Increase `DEADZONE_*_MM` values in config.py
-2. Decrease `alpha` (EMA smoothing factor) - make it slower
-3. Ensure **laser projector is enabled** (visible red dots)
-4. Check **lighting conditions**
-
-### High Latency
-
-**Problem:** Noticeable delay between hand movement and drone response
-
-**Solutions:**
-1. Use `standalone_gpu.py` instead of `main_modular.py`
-2. Reduce USB hub chains - connect directly to PC
-3. Check CPU usage (should be < 50%)
-4. Ensure **mediapipe model is using GPU** (look for GPU acceleration message)
-
-### Laser Dot Projector Not Visible
-
-**Problem:** No red dots visible on hand
-
-**Solutions:**
-1. Check intensity: should show "Laser Dot Projector ENABLED at 40%"
-2. Ensure room is **not too bright** (works better in dim light)
-3. Try moving hand closer to camera
-4. Verify device is **OAK-D Pro** (laser requires Pro model)
-
-### Arduino Not Receiving Commands
-
-**Problem:** `[Arduino] Write error` messages
-
-**Solutions:**
-1. Check USB cable is data cable (not power-only)
-2. Verify Arduino board type in Arduino IDE settings
-3. Test with: `python -m serial.tools.miniterm COM3 115200`
-4. Add 100μF capacitor across Arduino GND/VCC for power stability
-
----
-
-## 📊 Performance
-
-| Metric | Value |
-|--------|-------|
-| Hand Detection Latency | 16-25ms (MediaPipe IMAGE mode) |
-| Depth Sensing Latency | ~8ms (stereo processing) |
-| Total Loop Time | ~30-40ms (25-33 FPS) |
-| Serial Output Rate | 25Hz (40ms interval) |
-| CPU Usage | 20-40% (RTX 3070 Ti with GPU) |
-| Memory Usage | ~500-800MB |
-
----
-
-## 🎮 Controls
+### Keyboard controls
 
 | Key | Action |
-|-----|--------|
-| **Q** | Quit application |
-| **R** | Recalibrate yaw neutral (show FIVE gesture) |
-| **Esc** | Emergency stop (close all windows) |
+| --- | --- |
+| `Q` | Quit either application |
+| `R` | Request yaw recalibration |
+| `P` / `G` | Switch the modular application to keyboard / gesture mode |
+| `Space` | Send the arm command in modular keyboard mode |
+| `W` / `S` | Increase / decrease keyboard throttle |
+| `A` / `D` | Adjust keyboard yaw |
+| `I` / `K` | Adjust keyboard pitch with held-key support |
+| `J` / `L` | Adjust keyboard roll |
 
----
+In the modular application, detected `ONE` and `FIST` gestures override keyboard commands. Held-key input uses the `keyboard` package; the OpenCV key-event fallback has more limited behavior.
 
-## 🔗 Integration with Pixhawk
+## Configuration and troubleshooting
 
-### PPM Signal Format
+- **Camera connection:** run `probe_device.py`, check the USB connection, and inspect the startup output.
+- **Model not found:** run from `PythonProject` and confirm `models/hand_landmarker.task` exists.
+- **Serial connection:** check the port with `serial.tools.list_ports` and close other programs using it, including Arduino Serial Monitor.
+- **OpenCV display errors:** review the GUI/headless package notes in `PythonProject/requirements.txt`.
+- **Gesture switching or jitter:** adjust `--gesture-hold` and review the deadzones and cruise sensitivity in [config.py](PythonProject/hand_pose/config.py).
+- **Unexpected channel behavior:** check which entry point is running. Changes to the modular controller do not automatically change `standalone_gpu.py`.
 
-Arduino generates **8-channel PPM signal**:
-```
-Channel 1 = Roll
-Channel 2 = Pitch
-Channel 3 = Throttle
-Channel 4 = Yaw
-Channels 5-8 = Reserved/Aux
-```
+## Repository layout
 
-### Pixhawk Configuration
-
-In Mission Planner:
-1. Set RC input protocol to **PPM**
-2. Set receiver servo output to **GPIO Pin 10** (Arduino)
-3. Calibrate RC stick ranges
-4. Set flight mode to **Stabilize** or **AltHold**
-
----
-
-## 📝 License & Attribution
-
-- **MediaPipe** - Google (Apache 2.0)
-- **DepthAI** - Luxonis (MIT)
-- **OpenCV** - Open Source (Apache 2.0)
-
----
-
-## 🤝 Contributing
-
-Found a bug? Have a feature request?
-
-1. Test the issue with `standalone_gpu.py`
-2. Check `requirements.txt` for dependency versions
-3. Review `hand_pose/config.py` for tuning suggestions
-4. Open an issue with:
-   - OS (Windows/Linux/Mac)
-   - Device model (OAK-D Pro/Lite)
-   - Error message & stack trace
-
----
-
-## 📚 Quick Reference
-
-### Start Hand Pose Estimation
-```bash
-python standalone_gpu.py
+```text
+HandFly/
+├── README.md
+├── arduin_code.ino                 # Serial-to-PPM firmware
+├── docs/media/                     # Build photos, diagrams, and demo videos
+└── PythonProject/
+    ├── main_modular.py             # Modular application and keyboard controls
+    ├── standalone_gpu.py           # Standalone gesture-control implementation
+    ├── main.py                     # Additional entry point
+    ├── hand_pose/                  # Gesture, flight-control, pipeline, and serial modules
+    ├── models/hand_landmarker.task # MediaPipe hand landmark model
+    ├── probe_device.py             # Camera connection diagnostic
+    ├── test_gestures.py            # Gesture diagnostic
+    └── requirements.txt           # Application dependencies
 ```
 
-### Start with Arduino
-```bash
-python standalone_gpu.py --port COM3
-```
+## Project status
 
-### Run Full System
-```bash
-python main_modular.py --port COM3
-```
-
-### Test Gestures
-```bash
-python test_gestures.py
-```
-
-### Benchmark Performance
-```bash
-python test_mediapipe_latency.py
-```
-
-### Debug Depth Sensor
-```bash
-python DotP_test.py
-```
-
----
-
-## ❓ FAQ
-
-**Q: Can I use OAK-D Lite instead of Pro?**
-A: Yes, but without laser dot projector. Depth will be less accurate in low-texture areas.
-
-**Q: How accurate is the depth?**
-A: ±5-10mm at 50cm with laser enabled. Accuracy degrades beyond 1m.
-
-**Q: Can I control multiple drones?**
-A: Currently supports 1 drone. Multi-drone would require channel switching logic.
-
-**Q: Is this compatible with DJI drones?**
-A: No, designed for Pixhawk-based drones only. DJI drones require proprietary APIs.
-
-**Q: Can I run this on Jetson Nano?**
-A: Yes, but MediaPipe inference will be slower (~50-100ms latency).
-
----
-
-**Last Updated:** April 2026  
-**Status:** Stable & Production Ready
-
+HandFly is a hardware prototype with flight and weighted-functionality recordings included above. The photos and videos document the build; the code and configuration define the behavior of each application variant.
